@@ -29,7 +29,9 @@ class WhatsAppNotifier:
 
         if self.settings.twilio_content_sid:
             kwargs["content_sid"] = self.settings.twilio_content_sid
-            kwargs["content_variables"] = self.settings.twilio_content_variables or "{}"
+            kwargs["content_variables"] = parse_content_variables(
+                self.settings.twilio_content_variables
+            )
         else:
             kwargs["body"] = body
 

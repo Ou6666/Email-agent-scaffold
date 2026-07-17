@@ -84,6 +84,36 @@ To inspect saved analysis quality records:
 .venv\Scripts\python -m app.dashboard
 ```
 
+## Connectivity Diagnostics
+
+Use diagnostics before running the full agent against real services.
+
+Check local config only:
+
+```powershell
+.venv\Scripts\python -m app.diagnostics
+```
+
+Try reading one real Gmail message:
+
+```powershell
+.venv\Scripts\python -m app.diagnostics --gmail-live
+```
+
+Send one real WhatsApp test message through Twilio:
+
+```powershell
+.venv\Scripts\python -m app.diagnostics --whatsapp-send
+```
+
+Run both live tests:
+
+```powershell
+.venv\Scripts\python -m app.diagnostics --all
+```
+
+For WhatsApp testing with Twilio Sandbox, make sure your personal WhatsApp number has joined the sandbox first. Use E.164 format, for example `whatsapp:+351XXXXXXXXX`.
+
 ## LLM Analyzer
 
 The project currently supports two analyzer modes:
