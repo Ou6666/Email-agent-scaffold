@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -77,6 +78,7 @@ class GmailClient:
                     "Gmail credentials file is missing. Download OAuth Desktop app "
                     f"credentials from Google Cloud and save it at {self.credentials_path}."
                 )
+            self._validate_credentials_file()
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(self.credentials_path), self.scopes
             )
@@ -84,6 +86,20 @@ class GmailClient:
 
         self.token_path.write_text(creds.to_json())
         return creds
+
+    def _validate_credentials_file(self) -> None:
+        payload = json.loads(self.credentials_path.read_text())
+        if "installed" in payload:
+            return
+        if "web" in payload:
+            raise GmailClientError(
+                "credentials.json is a Web application OAuth client. Create an "
+                "OAuth Client ID with Application type 'Desktop app', download it, "
+                "and replace credentials.json."
+            )
+        raise GmailClientError(
+            "credentials.json is not a recognized Google OAuth client file."
+        )
 
     def _to_email_message(self, raw_message: dict[str, Any]) -> EmailMessage:
         payload = raw_message.get("payload", {})

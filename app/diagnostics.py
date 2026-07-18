@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
+import json
 
 from googleapiclient.errors import HttpError
 from twilio.base.exceptions import TwilioRestException
@@ -74,6 +75,24 @@ def check_gmail_config(settings: Settings) -> DiagnosticResult:
             "Gmail config",
             False,
             f"Missing credentials file: {credentials_path}",
+        )
+
+    credential_type = _google_credentials_type(credentials_path)
+    if credential_type == "web":
+        return DiagnosticResult(
+            "Gmail config",
+            False,
+            (
+                "credentials.json is a Web application OAuth client. Create a new "
+                "OAuth Client ID with Application type 'Desktop app', download it, "
+                "and replace credentials.json."
+            ),
+        )
+    if credential_type != "installed":
+        return DiagnosticResult(
+            "Gmail config",
+            False,
+            "credentials.json is not a recognized Desktop OAuth client file.",
         )
 
     token_note = "token.json exists" if token_path.exists() else "token.json not created yet"
@@ -174,6 +193,18 @@ def print_results(results: list[DiagnosticResult]) -> None:
 def _resolve_project_path(value: str) -> Path:
     path = Path(value)
     return path if path.is_absolute() else BASE_DIR / path
+
+
+def _google_credentials_type(path: Path) -> str:
+    try:
+        payload = json.loads(path.read_text())
+    except Exception:
+        return "invalid"
+    if "installed" in payload:
+        return "installed"
+    if "web" in payload:
+        return "web"
+    return "unknown"
 
 
 def _mask(value: str | None) -> str:
