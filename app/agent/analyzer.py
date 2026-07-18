@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import re
 
 from app.agent.schemas import EmailAnalysis, EmailMessage
@@ -7,14 +8,18 @@ from app.agent.schemas import EmailAnalysis, EmailMessage
 
 class RuleBasedEmailAnalyzer:
     def analyze(self, message: EmailMessage) -> EmailAnalysis:
-        text = f"{message.subject}\n{message.body_text}".lower()
-        category = self._category(text)
+        subject_text = _normalize_for_matching(message.subject)
+        sender_text = _normalize_for_matching(message.sender)
+        body_text = _normalize_for_matching(message.body_text)
+        text = f"{subject_text} {sender_text} {body_text}"
+        category = self._category(subject_text, sender_text, body_text)
         priority = self._priority(text, category, bool(message.attachments))
         needs_reply = self._needs_reply(text)
         needs_follow_up = needs_reply or category in {
             "job_opportunity",
             "academic_opportunity",
             "meeting",
+            "account_or_security",
         }
         deadline = self._deadline(text)
         opportunity_score = self._opportunity_score(text, category)
@@ -25,7 +30,7 @@ class RuleBasedEmailAnalyzer:
             category=category,
             needs_reply=needs_reply,
             needs_follow_up=needs_follow_up,
-            summary=self._summary(message),
+            summary=self._summary(message, category),
             key_points=self._key_points(message, category, deadline),
             action_items=self._action_items(text, category, needs_reply, deadline),
             deadline=deadline,
@@ -40,20 +45,82 @@ class RuleBasedEmailAnalyzer:
             raw={"analyzer": "rule_based"},
         )
 
-    def _category(self, text: str) -> str:
-        if _contains(text, ["internship", "job", "career", "position", "recruiter"]):
+    def _category(self, subject: str, sender: str, body: str) -> str:
+        if _contains(
+            subject,
+            [
+                "internship",
+                "job",
+                "jobs",
+                "career",
+                "position",
+                "recruiter",
+                "hiring",
+                "vacancy",
+                "apply now",
+            ],
+        ) or _contains(
+            body,
+            ["we are hiring", "job opening", "job alert", "apply for this role"],
+        ):
             return "job_opportunity"
-        if _contains(text, ["scholarship", "research", "conference", "call for papers"]):
+        if _contains(
+            subject,
+            ["scholarship", "research", "conference", "call for papers"],
+        ) or _contains(body, ["call for papers", "research opportunity"]):
             return "academic_opportunity"
-        if _contains(text, ["meeting", "calendar", "confirm", "rsvp"]):
+        if _contains(subject, ["meeting", "calendar", "confirm", "rsvp"]):
             return "meeting"
-        if _contains(text, ["invoice", "payment", "security", "password"]):
+        if _contains(
+            subject,
+            [
+                "verify",
+                "verification",
+                "security",
+                "password",
+                "suspicious",
+                "sign-in",
+                "login",
+            ],
+        ):
             return "account_or_security"
-        if _contains(text, ["sale", "discount", "newsletter", "promo", "offer"]):
+        receipt_terms = [
+            "receipt",
+            "order",
+            "invoice",
+            "purchase confirmation",
+            "recibo",
+            "encomenda",
+            "收据",
+            "订单",
+        ]
+        if _contains(subject, receipt_terms) or _contains(sender, receipt_terms):
+            return "receipt_or_transaction"
+        promotion_terms = [
+            "sale",
+            "discount",
+            "newsletter",
+            "promo",
+            "promotion",
+            "offer",
+            "deal",
+            "% off",
+            "last chance",
+            "flash",
+            "book now",
+            "save now",
+            "desconto",
+            "oferta",
+            "poupança",
+            "últimos dias",
+        ]
+        if _contains(subject, promotion_terms) or _contains(body, promotion_terms):
             return "promotion"
         return "general"
 
     def _priority(self, text: str, category: str, has_attachments: bool) -> int:
+        if category in {"promotion", "receipt_or_transaction"}:
+            return 2
         if _contains(text, ["urgent", "today", "tomorrow", "final reminder", "interview"]):
             return 5
         if category in {"job_opportunity", "academic_opportunity"}:
@@ -62,8 +129,6 @@ class RuleBasedEmailAnalyzer:
             return 4
         if has_attachments and _contains(text, ["review", "sign", "submit"]):
             return 4
-        if category == "promotion":
-            return 2
         return 3
 
     def _needs_reply(self, text: str) -> bool:
@@ -83,10 +148,11 @@ class RuleBasedEmailAnalyzer:
 
     def _deadline(self, text: str) -> str | None:
         patterns = [
-            r"deadline is ([^.,\n]+)",
-            r"due ([^.,\n]+)",
-            r"by ([^.,\n]+)",
-            r"closes? ([^.,\n]+)",
+            r"\bdeadline(?: is|:)? ([^.,;]{2,60})",
+            r"\bdue(?: by| on|:)? ([^.,;]{2,60})",
+            r"\bapply by ([^.,;]{2,60})",
+            r"\bcloses?(?: on| at)? ([^.,;]{2,60})",
+            r"\bby (today|tomorrow|midnight|end of day|end of week)\b",
         ]
         for pattern in patterns:
             match = re.search(pattern, text)
@@ -106,6 +172,8 @@ class RuleBasedEmailAnalyzer:
             score = 6
         elif category == "promotion":
             score = 2
+        elif category == "receipt_or_transaction":
+            score = 1
         else:
             score = 3
 
@@ -116,7 +184,7 @@ class RuleBasedEmailAnalyzer:
         return min(score, 10)
 
     def _quality_score(self, priority: int, opportunity_score: int, category: str) -> int:
-        if category == "promotion":
+        if category in {"promotion", "receipt_or_transaction"}:
             return 2 if priority <= 2 else 4
         score = max(priority * 2, opportunity_score)
         if category in {"job_opportunity", "academic_opportunity", "meeting"}:
@@ -130,8 +198,14 @@ class RuleBasedEmailAnalyzer:
             return "medium"
         return "low"
 
-    def _summary(self, message: EmailMessage) -> str:
-        first_sentence = re.split(r"(?<=[.!?])\s+", message.body_text.strip())[0]
+    def _summary(self, message: EmailMessage, category: str) -> str:
+        if category == "promotion":
+            return f"Promotional email: {message.subject}"
+        if category == "receipt_or_transaction":
+            return f"Receipt or order update: {message.subject}"
+
+        visible_text = _visible_text(message.body_text)
+        first_sentence = re.split(r"(?<=[.!?])\s+", visible_text)[0]
         if len(first_sentence) > 240:
             first_sentence = first_sentence[:237].rstrip() + "..."
         return first_sentence or message.subject
@@ -156,14 +230,57 @@ class RuleBasedEmailAnalyzer:
         items: list[str] = []
         if needs_reply:
             items.append("Draft and send a reply")
+        if category == "account_or_security":
+            if _contains(text, ["verify", "verification"]):
+                items.append("Complete the account verification")
+            else:
+                items.append("Review the account or security notice")
         if category in {"job_opportunity", "academic_opportunity"}:
             items.append("Review the opportunity details")
         if _contains(text, ["cv", "resume"]):
             items.append("Prepare or update CV")
-        if deadline:
+        if deadline and category not in {"promotion", "receipt_or_transaction"}:
             items.append(f"Plan before deadline: {deadline}")
         return items or ["No immediate action required"]
 
 
 def _contains(text: str, keywords: list[str]) -> bool:
-    return any(keyword in text for keyword in keywords)
+    for keyword in keywords:
+        normalized_keyword = keyword.lower()
+        if not normalized_keyword.isascii():
+            if normalized_keyword in text:
+                return True
+            continue
+        left_boundary = r"(?<![a-z0-9])" if normalized_keyword[0].isalnum() else ""
+        right_boundary = r"(?![a-z0-9])" if normalized_keyword[-1].isalnum() else ""
+        pattern = f"{left_boundary}{re.escape(normalized_keyword)}{right_boundary}"
+        if re.search(pattern, text):
+            return True
+    return False
+
+
+def _normalize_for_matching(value: str) -> str:
+    value = html.unescape(value)
+    value = re.sub(r"https?://\S+|www\.\S+", " ", value, flags=re.IGNORECASE)
+    value = re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff]", "", value)
+    return re.sub(r"\s+", " ", value).strip().lower()
+
+
+def _visible_text(value: str) -> str:
+    value = html.unescape(value)
+    value = re.sub(r"https?://\S+|www\.\S+", " ", value, flags=re.IGNORECASE)
+    value = re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff]", "", value)
+
+    lines: list[str] = []
+    for raw_line in value.splitlines():
+        line = raw_line.strip(" \t|*-#")
+        if not line or not any(character.isalnum() for character in line):
+            continue
+        if _contains(
+            line.lower(),
+            ["unsubscribe", "view this email in your browser", "manage preferences"],
+        ):
+            continue
+        lines.append(line)
+
+    return re.sub(r"\s+", " ", " ".join(lines[:4])).strip()

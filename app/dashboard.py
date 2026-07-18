@@ -1,8 +1,18 @@
+import sys
+from typing import TextIO
+
 from app.storage.database import init_db
 from app.storage.repository import EmailRepository
 
 
+def _configure_utf8_output(stream: TextIO) -> None:
+    reconfigure = getattr(stream, "reconfigure", None)
+    if callable(reconfigure):
+        reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> None:
+    _configure_utf8_output(sys.stdout)
     init_db()
     repository = EmailRepository()
     backfilled = repository.backfill_quality_fields()
